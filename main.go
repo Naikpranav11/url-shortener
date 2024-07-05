@@ -24,7 +24,7 @@ var db *sql.DB
 
 func main() {
 	var err error
-	db, err = sql.Open("sqlite3", "./data/urls.db")
+	db, err = sql.Open("sqlite3", "./data/database.sqlite3")
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -38,15 +38,14 @@ func main() {
 
 	r := mux.NewRouter()
 
+	// CORS middleware
+	r.Use(corsMiddleware)
+
 	// Endpoint to handle shortening URLs
 	r.HandleFunc("/api/shorten", shortenURL).Methods("POST")
 
 	// Endpoint to redirect shortened URLs
 	r.HandleFunc("/{shortened}", redirectToOriginal).Methods("GET")
-
-	// Serve static files (if needed)
-	fs := http.FileServer(http.Dir("./static"))
-	r.PathPrefix("/static/").Handler(http.StripPrefix("/static/", fs))
 
 	// Start the server
 	log.Println("Server started on http://localhost:8080")
@@ -126,4 +125,17 @@ func generateShortenedID() string {
 		b[i] = charset[seededRand.Intn(len(charset))]
 	}
 	return string(b)
+}
+
+func corsMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "http://localhost:3000")
+		w.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS, PUT, DELETE")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		if r.Method == "OPTIONS" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }

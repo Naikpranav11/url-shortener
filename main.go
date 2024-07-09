@@ -2,140 +2,120 @@ package main
 
 import (
 	"database/sql"
-	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"math/rand"
 	"net/http"
-	"time"
+	"strings"
 
-	"github.com/gorilla/mux"
 	_ "github.com/mattn/go-sqlite3"
+	"github.com/rs/cors"
 )
-
-// URL represents the structure of a URL object
-type URL struct {
-	Original string `json:"original"`
-	Short    string `json:"short"`
-}
 
 var db *sql.DB
 
 func main() {
 	var err error
-	db, err = sql.Open("sqlite3", "./data/database.sqlite3")
+	db, err = sql.Open("sqlite3", "urls.db")
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer db.Close()
 
-	// // Load and execute the SQL file
-	// err = executeSQLFile(db, "./data/load.sql")
-	// if err != nil {
-	// 	log.Fatal(err)
-	// }
+	// Create table if not exists
+	createTableStmt := `
+		CREATE TABLE IF NOT EXISTS urls (
+			short_url TEXT PRIMARY KEY,
+			long_url TEXT NOT NULL
+		);
+	`
+	_, err = db.Exec(createTableStmt)
+	if err != nil {
+		log.Fatal(err)
+	}
 
-	r := mux.NewRouter()
+	// CORS setup
+	c := cors.Default()
 
-	// CORS middleware
-	r.Use(corsMiddleware)
+	// HTTP handlers
+	http.HandleFunc("/", handleRedirect)
 
-	// Endpoint to handle shortening URLs
-	r.HandleFunc("/api/shorten", shortenURL).Methods("POST")
-
-	// Endpoint to redirect shortened URLs
-	r.HandleFunc("/{shortened}", redirectToOriginal).Methods("GET")
+	// Handle the shorten endpoint
+	http.HandleFunc("/shorten", handleShorten)
+	log.Println("Starting server on 0.0.0.0:8080")
 
 	// Start the server
-	log.Println("Server started on http://localhost:8080")
-	log.Fatal(http.ListenAndServe(":8080", r))
+	http.ListenAndServe(":8080", c.Handler(http.DefaultServeMux))
 }
 
-func executeSQLFile(db *sql.DB, filepath string) error {
-	content, err := ioutil.ReadFile(filepath)
-	if err != nil {
-		return fmt.Errorf("failed to read SQL file: %v", err)
-	}
+func handleRedirect(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 
-	_, err = db.Exec(string(content))
-	if err != nil {
-		return fmt.Errorf("failed to execute SQL file: %v", err)
-	}
+	// Get the short URL from the path
+	shortURL := strings.TrimPrefix(r.URL.Path, "/")
+	log.Printf("Received redirect request for short URL: %s", shortURL)
 
-	return nil
-}
-
-func shortenURL(w http.ResponseWriter, r *http.Request) {
-	var url URL
-	err := json.NewDecoder(r.Body).Decode(&url)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		log.Printf("Error decoding JSON: %v", err)
+	var longURL string
+	err := db.QueryRow("SELECT long_url FROM urls WHERE short_url = ?", shortURL).Scan(&longURL)
+	if err == sql.ErrNoRows {
+		log.Printf("Short URL not found: %s", shortURL)
+		http.NotFound(w, r)
+		return
+	} else if err != nil {
+		log.Printf("Error fetching long URL for short URL %s: %v", shortURL, err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
 
-	// Generate a unique shortened URL ID
-	shortenedID := generateShortenedID()
-	shortenedURL := "http://localhost:8080/" + shortenedID
+	log.Printf("Redirecting from short URL %s to long URL %s", shortURL, longURL)
+	http.Redirect(w, r, longURL, http.StatusFound)
+}
 
-	// Insert the original and shortened URL into the database
-	insertURL := `INSERT INTO urls (original_url, shortened_url) VALUES (?, ?)`
-	_, err = db.Exec(insertURL, url.Original, shortenedID)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		log.Printf("Error inserting into database: %v", err)
+func handleShorten(w http.ResponseWriter, r *http.Request) {
+
+	// CORS headers
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+
+	// Get the long URL from the query parameters
+	longURL := r.URL.Query().Get("url")
+	if longURL == "" {
+		log.Println("Missing URL parameter")
+		http.Error(w, "Missing URL parameter", http.StatusBadRequest)
 		return
 	}
 
-	// Respond with the shortened URL as JSON
-	response := URL{Original: url.Original, Short: shortenedURL}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
-}
+	log.Printf("Received request to shorten URL: %s", longURL)
 
-func redirectToOriginal(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	shortenedID := vars["shortened"]
+	// Fix the URL if it doesn't start with http:// or https://
+	if !strings.HasPrefix(longURL, "http://") && !strings.HasPrefix(longURL, "https://") {
+		longURL = "http://" + longURL
+	}
 
-	// Check if the shortened URL exists in the database
-	var originalURL string
-	query := `SELECT original_url FROM urls WHERE shortened_url = ?`
-	err := db.QueryRow(query, shortenedID).Scan(&originalURL)
+	// Generate a short URL and store the mapping
+	shortURL := generateShortURL()
+
+	_, err := db.Exec("INSERT INTO urls (short_url, long_url) VALUES (?, ?)", shortURL, longURL)
 	if err != nil {
-		if err == sql.ErrNoRows {
-			http.NotFound(w, r)
-		} else {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-		}
-		log.Printf("Error querying database: %v", err)
+		log.Printf("Failed to insert URL into database: %v", err)
+		http.Error(w, "Failed to shorten URL", http.StatusInternalServerError)
 		return
 	}
 
-	// Redirect to the original URL
-	http.Redirect(w, r, originalURL, http.StatusFound)
+	fmt.Fprintf(w, "http://%s/%s", r.Host, shortURL)
 }
 
-func generateShortenedID() string {
-	// Generate a random 6-character string for the shortened URL ID
-	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-	var seededRand = rand.New(rand.NewSource(time.Now().UnixNano()))
+func generateShortURL() string {
+
+	// Generate a random 6 character string
+	const letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 	b := make([]byte, 6)
 	for i := range b {
-		b[i] = charset[seededRand.Intn(len(charset))]
+		b[i] = letters[rand.Intn(len(letters))]
 	}
-	return string(b)
-}
-
-func corsMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "http://localhost:3000")
-		w.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS, PUT, DELETE")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-		if r.Method == "OPTIONS" {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
+	shortURL := string(b)
+	return shortURL
 }

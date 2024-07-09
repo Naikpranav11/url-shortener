@@ -19,10 +19,11 @@ function UrlShortener() {
       console.error('Error shortening URL:', error);
     }
   };
-
+  // min-h-screen flex flex-col justify-center items-center bg-slate-200
+  // bg-gradient-to-b from-bg-slate-400 to-bg-white text-slate-800 antialiased dark:bg-slate-900
   return (
-    <div className="bg-gradient-to-b from-bg-slate-400 to-bg-white text-slate-800 antialiased dark:bg-slate-900">
-      <main className="mb-4">
+    <div className="min-h-screen flex flex-col justify-center items-center bg-slate-200">
+      <main className="mb-4 flex-grow">
         <div className="bg-slate-800 pb-6 drop-shadow-md shadow-md">
           <header className="mx-auto my-auto lg:max-w-8xl lg:w-[70rem] w-full px-4 pt-6 mb-1">
             <h1 className="text-4xl font-bold text-center mb-4 text-white">A Go URL Shortener</h1>
@@ -113,6 +114,16 @@ function UrlShortener() {
           </table>
         </div>
       </main>
+      <footer className="mx-auto my-auto lg:max-w-8xl lg:w-[70rem] w-full px-4 pl-5 lowercase text-slate-400 dark:text-slate-500 text-sm text-center mb-4">
+        <a
+          className="hover:underline underline-offset-4 decoration-2 decoration-slate-300 transition ease-in-out delay-150 duration-100">
+          Created by Matthew Setter.
+        </a>
+        <a
+          className="hover:underline underline-offset-4 decoration-2 decoration-slate-300 transition ease-in-out delay-150 duration-100">
+          Powered by Twilio.
+        </a>
+      </footer>
     </div>
   );
 }

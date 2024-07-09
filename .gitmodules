@@ -1,0 +1,3 @@
+[submodule "url-shortener-client"]
+	path = url-shortener-client
+	url = https://github.com/Naikpranav11/url-shortener.git
